@@ -866,9 +866,23 @@ textarea { resize: vertical; min-height: 80px; font-size: 15px; }
     <div class="section-label" style="font-size:1.3rem; margin-bottom:12px;">Card Details</div>
     <div class="secure-note">🔒 Secure payment powered by Square — encrypted & PCI compliant</div>
 
+    <div id="payment-status" style="font-size:13px; color:var(--danger-text); margin-bottom:8px; display:none; padding:8px 12px; background:#1a0a0a; border:1px solid #7a1a1a; border-radius:var(--radius);"></div>
+
+    <!-- Digital wallets -->
+    <div id="wallet-buttons" style="display:flex; flex-direction:column; gap:10px; margin-bottom:14px;">
+      <div id="apple-pay-button" style="display:none; height:48px; border-radius:var(--radius); overflow:hidden;"></div>
+      <div id="google-pay-button" style="display:none; height:48px; border-radius:var(--radius); overflow:hidden;"></div>
+      <div id="cashapp-button" style="display:none; height:48px; border-radius:var(--radius); overflow:hidden;"></div>
+    </div>
+
+    <div id="wallet-divider" style="display:none; text-align:center; margin-bottom:14px; position:relative;">
+      <div style="height:1px; background:var(--steel); position:absolute; top:50%; left:0; right:0;"></div>
+      <span style="background:var(--black); padding:0 12px; font-size:12px; color:var(--mist); position:relative; text-transform:uppercase; letter-spacing:0.06em;">or pay by card</span>
+    </div>
+
+    <!-- Card input -->
     <div style="background:var(--charcoal); border:1px solid var(--steel); border-radius:var(--radius); padding:16px; margin-bottom:16px;">
       <div id="card-container" style="min-height:89px;"></div>
-      <div id="payment-status" style="font-size:13px; color:var(--danger-text); margin-top:8px; display:none;"></div>
     </div>
 
     <div class="policy-agree">
@@ -1228,26 +1242,72 @@ function formatExp(el) {
 
   let squareCard = null;
 
+  let squarePayments = null;
+  let googlePay = null;
+  let applePay = null;
+  let cashApp = null;
+
   async function initSquare() {
-    const container = document.getElementById('card-container');
     const statusEl = document.getElementById('payment-status');
-    
-    // Wait for Square SDK to load
+
+    // Wait for Square SDK
     let attempts = 0;
     while (!window.Square && attempts < 20) {
       await new Promise(r => setTimeout(r, 500));
       attempts++;
     }
-    
     if (!window.Square) {
-      if (statusEl) { statusEl.textContent = 'Payment system failed to load. Please refresh the page.'; statusEl.style.display = 'block'; }
-      console.error('Square.js never loaded');
+      if (statusEl) { statusEl.textContent = 'Payment system failed to load. Please refresh.'; statusEl.style.display = 'block'; }
       return;
     }
 
     try {
-      const payments = window.Square.payments('sq0idp-sL7L8BN8-S6D9ny1fBjkIA', 'LPH36P0GESWXW');
-      squareCard = await payments.card({
+      squarePayments = window.Square.payments('sq0idp-sL7L8BN8-S6D9ny1fBjkIA', 'LPH36P0GESWXW');
+
+      const paymentRequest = squarePayments.paymentRequest({
+        countryCode: 'US',
+        currencyCode: 'USD',
+        total: { amount: '25.00', label: 'Booking Deposit — Unforgotten Auto Detailing' },
+      });
+
+      let walletsVisible = false;
+
+      // Google Pay
+      try {
+        googlePay = await squarePayments.googlePay(paymentRequest);
+        await googlePay.attach('#google-pay-button');
+        document.getElementById('google-pay-button').style.display = 'block';
+        walletsVisible = true;
+        googlePay.addEventListener('ontokenization', handleWalletToken);
+      } catch(e) { console.log('Google Pay not available:', e.message); }
+
+      // Apple Pay
+      try {
+        applePay = await squarePayments.applePay(paymentRequest);
+        await applePay.attach('#apple-pay-button');
+        document.getElementById('apple-pay-button').style.display = 'block';
+        walletsVisible = true;
+        applePay.addEventListener('ontokenization', handleWalletToken);
+      } catch(e) { console.log('Apple Pay not available:', e.message); }
+
+      // Cash App Pay
+      try {
+        cashApp = await squarePayments.cashAppPay(paymentRequest, {
+          redirectURL: window.location.href,
+          referenceId: 'un4-' + Date.now(),
+        });
+        await cashApp.attach('#cashapp-button');
+        document.getElementById('cashapp-button').style.display = 'block';
+        walletsVisible = true;
+        cashApp.addEventListener('ontokenization', handleWalletToken);
+      } catch(e) { console.log('Cash App Pay not available:', e.message); }
+
+      if (walletsVisible) {
+        document.getElementById('wallet-divider').style.display = 'block';
+      }
+
+      // Always show card form
+      squareCard = await squarePayments.card({
         style: {
           '.input-container': { borderColor: '#2a2a2a', borderRadius: '8px' },
           '.input-container.is-focus': { borderColor: '#086CC1' },
@@ -1258,14 +1318,100 @@ function formatExp(el) {
       });
       await squareCard.attach('#card-container');
       if (statusEl) statusEl.style.display = 'none';
-      console.log('Square card initialized successfully');
+
     } catch(e) {
       console.error('Square init error:', e);
-      if (statusEl) { 
-        statusEl.textContent = 'Card form failed to load: ' + e.message + '. Please refresh.'; 
-        statusEl.style.display = 'block'; 
-      }
+      if (statusEl) { statusEl.textContent = 'Payment failed to load: ' + e.message; statusEl.style.display = 'block'; }
     }
+  }
+
+  async function handleWalletToken(event) {
+    if (event.detail.tokenResult.status === 'OK') {
+      await processPaymentWithToken(event.detail.tokenResult.token);
+    } else {
+      const statusEl = document.getElementById('payment-status');
+      if (statusEl) { statusEl.textContent = 'Payment cancelled or failed. Try again.'; statusEl.style.display = 'block'; }
+    }
+  }
+
+  async function processPaymentWithToken(token) {
+    const statusEl = document.getElementById('payment-status');
+    const btn = document.getElementById('btnNext');
+    btn.textContent = 'Processing...';
+    btn.disabled = true;
+
+    const fname = document.getElementById('firstName').value;
+    const lname = document.getElementById('lastName').value;
+    const email = document.getElementById('email').value;
+    const services = getSelectedServices();
+
+    try {
+      const response = await fetch('/.netlify/functions/process-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceId: token,
+          amount: 25,
+          customerName: fname + ' ' + lname,
+          customerEmail: email,
+          note: 'Booking deposit — ' + services.map(s => s.name).join(', '),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!data.success) {
+        if (statusEl) { statusEl.textContent = data.error || 'Payment failed. Try again.'; statusEl.style.display = 'block'; }
+        btn.textContent = 'Pay $25 & Book →';
+        btn.disabled = false;
+        return;
+      }
+
+      finishBooking(data.paymentId);
+
+    } catch(err) {
+      if (statusEl) { statusEl.textContent = 'Network error. Check connection and try again.'; statusEl.style.display = 'block'; }
+      btn.textContent = 'Pay $25 & Book →';
+      btn.disabled = false;
+    }
+  }
+
+  function finishBooking(paymentId) {
+    const fname = document.getElementById('firstName').value;
+    const lname = document.getElementById('lastName').value;
+    const email = document.getElementById('email').value;
+    const vehicle = document.getElementById('vehicle').value;
+    const address = document.getElementById('address').value;
+    const services = getSelectedServices();
+    const total = getTotal();
+
+    document.getElementById('confirmDetail').innerHTML =
+      `<div class="confirm-row"><span>Name</span><span>${fname} ${lname}</span></div>
+       <div class="confirm-row"><span>Email</span><span>${email}</span></div>
+       <div class="confirm-row"><span>Address</span><span>${address}</span></div>
+       <div class="confirm-row"><span>Vehicle</span><span>${vehicle}</span></div>
+       <div class="confirm-row"><span>Date</span><span>${state.date}</span></div>
+       <div class="confirm-row"><span>Time</span><span>${state.time}</span></div>
+       ${services.map(s=>`<div class="confirm-row"><span>${s.name}</span><span>$${s.price}</span></div>`).join('')}
+       <div class="confirm-row"><span>Total</span><span>$${total}</span></div>
+       <div class="confirm-row"><span>Deposit Paid</span><span style="color:var(--blue);">$25 ✓</span></div>
+       <div class="confirm-row"><span>Balance at Service</span><span>$${total - 25}</span></div>
+       <div class="confirm-row"><span>Payment ID</span><span style="font-size:11px;color:var(--mist);">${paymentId}</span></div>`;
+
+    saveToDashboard({
+      fname, lname, email,
+      phone: document.getElementById('phone').value,
+      address, vehicle,
+      vehicleColor: document.getElementById('vehicleColor').value,
+      notes: document.getElementById('notes').value,
+      services, total,
+      date: state.date,
+      time: state.time,
+      vehiclePhoto: state.vehiclePhoto,
+      paymentId,
+    });
+
+    goToStep(5);
   }
 
   async function submitBooking() {
