@@ -42,7 +42,7 @@ exports.handler = async (event) => {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
-        'Square-Version': '2024-01-18',
+        'Square-Version': '2026-05-20',
       },
       body: JSON.stringify({
         idempotency_key: idempotencyKey,
@@ -58,9 +58,11 @@ exports.handler = async (event) => {
     });
 
     const data = await response.json();
+    console.log('Square response:', response.status, JSON.stringify(data).substring(0, 200));
 
     if (!response.ok || data.errors) {
       const errMsg = data.errors ? data.errors[0].detail : 'Payment declined';
+      console.error('Square error:', JSON.stringify(data.errors));
       return { statusCode: 400, headers, body: JSON.stringify({ error: errMsg }) };
     }
 
@@ -76,6 +78,7 @@ exports.handler = async (event) => {
     };
 
   } catch (err) {
+    console.error('Fetch error:', err.message);
     return {
       statusCode: 500,
       headers,
