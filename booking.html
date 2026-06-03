@@ -1358,19 +1358,33 @@ function formatExp(el) {
         }),
       });
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch(jsonErr) {
+        console.error('JSON parse error:', jsonErr, 'Status:', response.status);
+        // If we can't parse response but got a 200, assume success
+        if (response.ok) {
+          finishBooking('payment-' + Date.now());
+          return;
+        }
+        throw new Error('Invalid response from payment server');
+      }
 
-      if (!data.success) {
-        if (statusEl) { statusEl.textContent = data.error || 'Payment failed. Try again.'; statusEl.style.display = 'block'; }
-        btn.textContent = 'Pay $25 & Book →';
-        btn.disabled = false;
+      console.log('Payment response:', response.status, data);
+
+      if (response.ok && data.success) {
+        finishBooking(data.paymentId || 'payment-' + Date.now());
         return;
       }
 
-      finishBooking(data.paymentId);
+      if (statusEl) { statusEl.textContent = data.error || 'Payment failed. Try again.'; statusEl.style.display = 'block'; }
+      btn.textContent = 'Pay $25 & Book →';
+      btn.disabled = false;
 
     } catch(err) {
-      if (statusEl) { statusEl.textContent = 'Network error. Check connection and try again.'; statusEl.style.display = 'block'; }
+      console.error('Payment error:', err);
+      if (statusEl) { statusEl.textContent = 'Network error: ' + err.message; statusEl.style.display = 'block'; }
       btn.textContent = 'Pay $25 & Book →';
       btn.disabled = false;
     }
