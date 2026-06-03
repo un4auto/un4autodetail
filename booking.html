@@ -1229,7 +1229,22 @@ function formatExp(el) {
   let squareCard = null;
 
   async function initSquare() {
-    if (!window.Square) { console.error('Square.js not loaded'); return; }
+    const container = document.getElementById('card-container');
+    const statusEl = document.getElementById('payment-status');
+    
+    // Wait for Square SDK to load
+    let attempts = 0;
+    while (!window.Square && attempts < 20) {
+      await new Promise(r => setTimeout(r, 500));
+      attempts++;
+    }
+    
+    if (!window.Square) {
+      if (statusEl) { statusEl.textContent = 'Payment system failed to load. Please refresh the page.'; statusEl.style.display = 'block'; }
+      console.error('Square.js never loaded');
+      return;
+    }
+
     try {
       const payments = window.Square.payments('sq0idp-sL7L8BN8-S6D9ny1fBjkIA', 'LPH36P0GESWXW');
       squareCard = await payments.card({
@@ -1242,8 +1257,14 @@ function formatExp(el) {
         }
       });
       await squareCard.attach('#card-container');
+      if (statusEl) statusEl.style.display = 'none';
+      console.log('Square card initialized successfully');
     } catch(e) {
       console.error('Square init error:', e);
+      if (statusEl) { 
+        statusEl.textContent = 'Card form failed to load: ' + e.message + '. Please refresh.'; 
+        statusEl.style.display = 'block'; 
+      }
     }
   }
 
